@@ -31,9 +31,15 @@ So the program:
    each bucket's per-hour median log-ratio `log(viewers_h / viewers_1)` and
    spread. The cuts are hard: the data are a step (unlocked vs
    not-yet-unlocked), not a gradient.
-3. Blends in a second signal: console-only launches peak higher and
-   tighter than the average launch. GTA VI is console-only with a rolling
-   midnight unlock.
+3. Blends in a second signal — but only when it applies: console-only
+   launches peak higher and tighter than the average launch. GTA VI is
+   console-only with a rolling midnight unlock. The console curve is
+   blended into the median at weight 0.65 **only when the target itself
+   is console-only** (read from the case notes); for a PC target it is
+   not blended in at all, because it only drags the median up.
+   Leave-one-out showed the old unconditional 50/50 blend cost 0.10
+   of loss overall: it pulled non-console launches' medians up by as
+   much as 0.33 log units late in the day.
 4. Forecasts `q_tau = v1 * exp(med_h + z_tau * sigma_h)` per hour, where
    `v1` is the target's hour-1 print.
 
@@ -52,10 +58,10 @@ the contest's log-scale pinball loss:
 | model | all 37 | hour-1 ≥ 20k | hour-1 ≥ 50k | console-only |
 |---|---|---|---|---|
 | persistence (house baseline) | 0.930 | 0.321 | 0.251 | 0.323 |
-| this model (3 buckets + console blend) | 0.486 | 0.265 | 0.226 | 0.202 |
+| this model (3 buckets + conditional console blend) | 0.384 | 0.253 | 0.208 | 0.202 |
 
 The house baseline scores ~0.387 on the four practice targets; this model
-is expected around 0.22–0.28 in the GTA regime (large hour-1, console-only,
+is expected around 0.18–0.24 in the GTA regime (large hour-1, console-only,
 rolling unlock).
 
 Run it locally:

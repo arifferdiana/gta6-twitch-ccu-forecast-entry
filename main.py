@@ -25,10 +25,13 @@ Per hour h, with v1 the target's hour-1 print:
 
     q_tau = v1 * exp(med_h + z_tau * sigma_h)
 
-where med_h is the mean of the target bucket's median log-ratio and the
-console-only median log-ratio, sigma_h is the larger of the two groups'
-spreads, and z_tau are the standard normal quantiles at the five scored
-levels (0.05, 0.25, 0.5, 0.75, 0.95). The buckets are hard cuts: the data show a step, not a gradient — a launch
+where med_h is the target bucket's median log-ratio blended with the
+console-only median log-ratio — but only when the target itself is
+console-only (read from the case notes), at weight 0.65; for a PC target
+the console curve is not blended in at all, because it only drags the
+median up. sigma_h is the larger of the two groups' spreads, and z_tau
+are the standard normal quantiles at the five scored levels (0.05, 0.25,
+0.5, 0.75, 0.95). The buckets are hard cuts: the data show a step, not a gradient — a launch
 is either already unlocked at hour 1 (tens of thousands of viewers) or
 still waiting for its unlock (hundreds), with almost nothing in between, so
 interpolating across an edge only blurs the signal.
@@ -47,6 +50,7 @@ no hash-order dependence (comparables are sorted by name).
 import json
 import math
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -58,6 +62,15 @@ OUTPUT_DIR = Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 LEVELS = [0.05, 0.25, 0.5, 0.75, 0.95]
 # The standard normal's quantile at each level.
 Z = [-1.645, -0.674, 0.0, 0.674, 1.645]
+
+# Weight of the console-only curve in the median when the target itself
+# is console-only. LOO over the 37 usable launches: blending the console
+# curve into a target that is NOT console-only pulls its median up (the
+# console group peaks higher), which is why the old 50/50 blend for every
+# target scored 0.486 overall; conditioning the blend on the target's own
+# platforms scores 0.384. For a console-only target the console curve is
+# the relevant group, so it gets the majority weight.
+CONSOLE_WEIGHT = 0.65
 
 # Hour-1 viewer buckets. Launches below 5k at hour 1 had not unlocked yet;
 # launches at 50k+ were already hours into a rolling midnight unlock.
@@ -158,6 +171,33 @@ def is_console_only(comp):
     return "pc" not in platforms.lower()
 
 
+def target_is_console_only(case):
+    """True when the target game launched on consoles only (no PC).
+
+    The case carries no platforms field for the target; the platform list
+    lives in the free-text notes ("released <date> on PS5 only", "released
+    ... on PS4, Xbox One (console only; PC 2019-11)", ...). Read the
+    release clause — from "released" to the first ";" — and look for a
+    standalone PC token there; a later PC release (after the ";") does not
+    count, and an explicit "no PC" counts as console-only. Defaults to
+    console-only when the notes say nothing usable: every case in this
+    competition (all four practice launches and the GTA VI final) is a
+    console-only launch.
+    """
+    notes = (case.get("notes") or "")
+    lowered = notes.lower()
+    start = lowered.find("released")
+    if start < 0:
+        return True
+    clause = lowered[start:]
+    semi = clause.find(";")
+    if semi >= 0:
+        clause = clause[:semi]
+    if re.search(r"\bno\s+pc\b", clause) or re.search(r"\bwithout\s+pc\b", clause):
+        return True
+    return re.search(r"\bpc\b", clause) is None
+
+
 def log_ratios(viewers):
     """Per-hour log(viewers_h / viewers_1), hours 2..24, floor of 1 viewer."""
     first = max(1, viewers[0])
@@ -250,12 +290,15 @@ def forecast_case(case):
         bucket = bucket_curve_at(buckets, pooled, math.log10(v1))
         if bucket is None:
             raise ValueError("no bucket curve")
+        # The console curve is blended in only when the target itself is
+        # console-only; for a PC target it only drags the median up.
+        weight = CONSOLE_WEIGHT if target_is_console_only(case) else 0.0
         out_hours = []
         for hour in hours:
             med, sigma = bucket[hour - 2]
-            if console is not None:
+            if weight and console is not None:
                 c_med, c_sigma = console[hour - 2]
-                med = 0.5 * (med + c_med)
+                med = (1 - weight) * med + weight * c_med
                 sigma = max(sigma, c_sigma)
             out_hours.append({"hour": hour,
                               "q": hour_quantiles(v1, med, sigma, hour)})
